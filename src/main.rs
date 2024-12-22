@@ -1,8 +1,15 @@
 mod parser;
+mod generate;
+mod domain;
+mod val;
+mod ast;
 
 use std::fs::File;
 use std::io::Read;
-use crate::parser::parser::parse_eprime_model;
+use crate::parser::parse_eprime_model;
+use crate::generate::generate;
+use crate::Assignments;
+use val::*;
 
 fn main() {
     let mut file = File::open("models/golomb.eprime").unwrap();
@@ -18,4 +25,8 @@ fn main() {
         }
     }
     
+    let mut result = Assignments::new();
+    result.insert("x".to_string(), Val::Matrix(vec![Val::Boolean(true), Val::Boolean(false)]));
+    let param_file = File::create("./out.param").unwrap();
+    generate(&result, param_file );
 }
