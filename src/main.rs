@@ -1,6 +1,5 @@
 mod parser;
 mod generate;
-mod domain;
 mod val;
 mod ast;
 
@@ -24,6 +23,8 @@ fn main() {
             }
         }
     }
+
+    // first stage: evaluate letting statements
     
     let mut result = Assignments::new();
     result.insert("x".to_string(), Val::Matrix(vec![Val::Boolean(true), Val::Boolean(false)]));

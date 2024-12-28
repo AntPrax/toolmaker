@@ -1,24 +1,26 @@
 use chumsky::prelude::*;
 use crate::val::*;
-use crate::domain::*;
 use crate::ast::*;
 use std::fmt;
 use std::collections::HashMap;
+use std::fmt::Write;
 type Span = std::ops::Range<usize>;
 
 
-pub struct Decls {
-    pub finds: Vec<Decl>,
-    pub givens: Vec<Decl>,
+
+
+pub struct EvaluatedModel {
+    pub finds: Vec<(String, Domain)>,
+    pub constraints: Vec<Constraint>
 }
 
-impl AliasedDomain {
-    fn unalias(
+impl DomainExpr {
+    fn eval(
         self,
         domains: &HashMap<String, Domain>,
         span: Span,
     ) -> Result<Domain, Simple<Token>> {
-        use crate::ast::AliasedDomain::*;
+        use crate::ast::DomainExpr::*;
         match self {
             Integer => Ok(Domain::Integer),
             Boolean => Ok(Domain::Boolean),
@@ -29,9 +31,9 @@ impl AliasedDomain {
             Matrix(indices, valdom) => {
                 let is = indices
                     .into_iter()
-                    .map(|d| d.unalias(domains, span.clone()))
+                    .map(|d| d.eval(domains, span.clone()))
                     .collect::<Result<Vec<_>, Simple<Token>>>()?;
-                let vd = valdom.unalias(domains, span)?;
+                let vd = valdom.eval(domains, span)?;
                 Ok(Domain::Matrix(is, Box::new(vd)))
             }
         }
@@ -69,7 +71,16 @@ enum Token {
     BoolLit(bool),
     IntLit(i64),
     Ident(String),
-    Other(char),
+    Plus,
+    Minus,
+    Times,
+    ToThePower,
+    LessThan,
+    GreaterThan,
+    And,
+    Or,
+    Xor,
+    Not
 }
 
 impl fmt::Display for Token {
@@ -105,7 +116,16 @@ impl fmt::Display for Token {
             BoolLit(b) => write!(f, "{}", b),
             IntLit(i) => write!(f, "{}", i),
             Ident(s) => write!(f, "{}", s),
-            Other(c) => write!(f, "{}", c),
+            And => f.write_str("/\\"),
+            Or => f.write_str("\\/"),
+            Plus => f.write_char('+'),
+            Minus => f.write_char('-'),
+            Times => f.write_char('*'),
+            ToThePower => f.write_str("**"),
+            LessThan => f.write_char('<'),
+            GreaterThan => f.write_char('-'),
+            Xor => f.write_str("XOR"),
+            Not => f.write_char('!')
         }
     }
 }
@@ -168,8 +188,13 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         just('[').to(LBracket),
         just(']').to(RBracket),
         just("ESSENCE'").to(EssencePrime),
-        text::ident().map(Token::Ident),
-        any().map(Other),
+        just('+').to(Plus),
+        just('-').to(Minus),
+        just("/\\").to(And),
+        just("\\/").to(Or),
+        just("**").to(ToThePower),
+        just('*').to(Times),
+        text::ident().map(Token::Ident)
     ))
     .boxed();
 
@@ -181,6 +206,33 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         .repeated()
         .then_ignore(parse_comments())
         .boxed()
+}
+
+fn parse_val_expr() -> impl Parser<Token, ValExpr, Error = Simple<Token>> {
+    use Token::*;
+
+    recursive(|val| {
+        let matrix = val
+            .clone()
+            .chain(just(Comma).ignore_then(val).repeated())
+            .or_not()
+            .flatten()
+            .then_ignore(just(Semicolon).then(parse_aliased_domain()).or_not())
+            .delimited_by(just(LBracket), just(RBracket))
+            .map(ValExpr::Matrix);
+
+        let primitive = select! {
+            Ident(s) => ValExpr::Alias(s),
+            IntLit(x) => ValExpr::Integer(x),
+            BoolLit(b) => ValExpr::Boolean(b),
+        };
+
+        // let plus = val.then_ignore(just(Plus))
+        // .then(val.clone()).map(|(a, b)| ValExpr::Plus(a, b));
+
+        choice((primitive, matrix))
+    })
+    .boxed()
 }
 
 fn parse_val() -> impl Parser<Token, Val, Error = Simple<Token>> {
@@ -206,7 +258,7 @@ fn parse_val() -> impl Parser<Token, Val, Error = Simple<Token>> {
     .boxed()
 }
 
-fn parse_aliased_domain() -> impl Parser<Token, AliasedDomain, Error = Simple<Token>> {
+fn parse_aliased_domain() -> impl Parser<Token, DomainExpr, Error = Simple<Token>> {
     use Token::*;
 
     let expr = recursive(|e| {
@@ -226,9 +278,9 @@ fn parse_aliased_domain() -> impl Parser<Token, AliasedDomain, Error = Simple<To
                     .delimited_by(just(LParen), just(RParen))
                     .or_not(),
             )
-            .to(AliasedDomain::Integer);
+            .to(DomainExpr::Integer);
 
-        let bool = just(Bool).to(AliasedDomain::Boolean);
+        let bool = just(Bool).to(DomainExpr::Boolean);
 
         let matrix = just(Matrix)
             .then_ignore(just(Indexed))
@@ -242,10 +294,10 @@ fn parse_aliased_domain() -> impl Parser<Token, AliasedDomain, Error = Simple<To
             )
             .then_ignore(just(Of))
             .then(domain)
-            .map(|(indexes, valtype)| AliasedDomain::Matrix(indexes, Box::new(valtype)));
+            .map(|(indexes, valtype)| DomainExpr::Matrix(indexes, Box::new(valtype)));
 
         let ident = select! {
-            Ident(s) => AliasedDomain::Alias(s)
+            Ident(s) => DomainExpr::Alias(s)
         };
 
         choice((matrix, bool, int, ident))
@@ -271,30 +323,27 @@ fn letting_prefix_parser() -> impl Parser<Token, String, Error = Simple<Token>> 
 fn statement_parser() -> impl Parser<Token, Statement, Error = Simple<Token>> {
     use Token::*;
 
-    let letting = letting_prefix_parser()
-        .then_ignore(just(Domain))
-        .then(parse_aliased_domain())
-        .map(|(name, dom)| Statement::LettingDomain(AliasedDecl {name, dom}))
-        .or(letting_prefix_parser()
-            .then(take_until(
-                choice((just(Letting), just(Given), just(Find))).ignored(),
-            ))
-            .to(Statement::LettingVal("one".to_string(), AliasedVal::Integer(1))));
-
     let ident = select! {
         Ident(s) => s
     };
+
+    let letting = letting_prefix_parser()
+        .then_ignore(just(Domain))
+        .then(parse_aliased_domain())
+        .map(|(name, dom)| Statement::LettingDomain( name, dom))
+        .or(letting_prefix_parser()
+            .then(parse_val_expr())
+            .map(|(name, val)| Statement::LettingVal(name, val)));
 
     let decl = |decl_keyword| {
         just(decl_keyword)
             .ignore_then(ident)
             .then_ignore(just(Colon))
             .then(parse_aliased_domain())
-            .map(|(i, d)| AliasedDecl { name: i, dom: d })
     };
 
-    let given = decl(Given).map(|decl| Statement::Given(decl));
-    let find = decl(Find).map(|decl| Statement::Find(decl));
+    let given = decl(Given).map(|(i, d)| Statement::Given(i, d));
+    let find = decl(Find).map(|(i, d)| Statement::Find(i, d));
 
     choice((letting, given, find)).boxed()
 }
@@ -309,7 +358,7 @@ fn lang_decl_parser() -> impl Parser<Token, (), Error = Simple<Token>> {
         .boxed()
 }
 
-fn model_parser() -> impl Parser<Token, Decls, Error = Simple<Token>> {
+fn model_parser() -> impl Parser<Token, Model, Error = Simple<Token>> {
     use Token::*;
 
     lang_decl_parser()
@@ -319,30 +368,22 @@ fn model_parser() -> impl Parser<Token, Decls, Error = Simple<Token>> {
             let mut domains = HashMap::new();
             let mut givens = Vec::new();
             let mut finds = Vec::new();
+            let mut constants = HashMap::new();
 
             for stmt in stmts {
                 match stmt {
-                    Statement::Given(d) => match d.dom.unalias(&domains, span.clone()) {
-                        Err(e) => emit(e),
-                        Ok(dom) => givens.push(Decl {name: d.name, dom}),
+                    Statement::Given(i, d) => givens.push((i, d)),
+                    Statement::Find( i, d) => finds.push((i, d)),
+                    Statement::LettingDomain(i, d) => {
+                        domains.insert(i, d);
                     },
-                    Statement::Find( d) => match d.dom.unalias(&domains, span.clone()) {
-                        Err(e) => emit(e),
-                        Ok(dom) => finds.push(Decl {name: d.name, dom}),
-                    },
-                    Statement::LettingDomain(d) => match d.dom.unalias(&domains, span.clone()) {
-                        Err(e) => emit(e),
-                        Ok(dom) => {
-                            if domains.insert(d.name.clone(), dom).is_some() {
-                                emit(duplicate_decl(span.clone(), d.name));
-                            }
-                        }
-                    },
-                    _ => {}
+                    Statement::LettingVal(name, val) => {
+                        constants.insert(name, val);
+                    }
                 }
             }
 
-            Decls { givens, finds }
+            Model { givens, finds, domains, constants, constraints: Vec::new() }
         })
         .boxed()
 }
@@ -377,7 +418,7 @@ where P: Parser<Token, T, Error = Simple<Token>> {
     }
 }
 
-pub fn parse_eprime_model(model: &str) -> Result<Decls, Vec<String>> {
+pub fn parse_eprime_model(model: &str) -> Result<Model, Vec<String>> {
     parse_eprime(model, model_parser())
 }
 

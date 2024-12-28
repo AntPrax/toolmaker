@@ -1,6 +1,14 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
+
+#[derive(Clone, Debug)]
+pub enum Domain {
+    Matrix(Vec<Domain>, Box<Domain>),
+    Integer,
+    Boolean,
+}
 
 #[derive(Clone, Debug)]
 pub enum Val {
@@ -86,4 +94,10 @@ impl<T: FromVal> FromVal for Vec<T> {
     }
 }
 
+pub enum ValOrDomain {
+    Val(Val),
+    Domain(Domain)
+}
+
+pub type IdentTable = HashMap<String, ValOrDomain>;
 pub type Assignments = BTreeMap<String, Val>;
