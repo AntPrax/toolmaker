@@ -1,25 +1,18 @@
-use chumsky::prelude::*;
-use crate::val::*;
 use crate::ast::*;
-use std::fmt;
+use crate::val::*;
+use chumsky::prelude::*;
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Write;
 type Span = std::ops::Range<usize>;
 
-
-
-
 pub struct EvaluatedModel {
     pub finds: Vec<(String, Domain)>,
-    pub constraints: Vec<Constraint>
+    pub constraints: Vec<Constraint>,
 }
 
 impl DomainExpr {
-    fn eval(
-        self,
-        domains: &HashMap<String, Domain>,
-        span: Span,
-    ) -> Result<Domain, Simple<Token>> {
+    fn eval(self, domains: &HashMap<String, Domain>, span: Span) -> Result<Domain, Simple<Token>> {
         use crate::ast::DomainExpr::*;
         match self {
             Integer => Ok(Domain::Integer),
@@ -39,7 +32,6 @@ impl DomainExpr {
         }
     }
 }
-
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 enum Token {
@@ -80,7 +72,7 @@ enum Token {
     And,
     Or,
     Xor,
-    Not
+    Not,
 }
 
 impl fmt::Display for Token {
@@ -125,7 +117,7 @@ impl fmt::Display for Token {
             LessThan => f.write_char('<'),
             GreaterThan => f.write_char('-'),
             Xor => f.write_str("XOR"),
-            Not => f.write_char('!')
+            Not => f.write_char('!'),
         }
     }
 }
@@ -194,7 +186,7 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         just("\\/").to(Or),
         just("**").to(ToThePower),
         just('*').to(Times),
-        text::ident().map(Token::Ident)
+        text::ident().map(Token::Ident),
     ))
     .boxed();
 
@@ -208,13 +200,24 @@ fn lexer() -> impl Parser<char, Vec<Token>, Error = Simple<char>> {
         .boxed()
 }
 
+fn bin_op(
+    expr: impl Parser<Token, ValExpr, Error = Simple<Token>> + Clone,
+    token: Token,
+    constructor: fn(Box<ValExpr>, Box<ValExpr>) -> ValExpr,
+) -> impl Parser<Token, ValExpr, Error = Simple<Token>> {
+    expr.clone()
+        .then_ignore(just(token))
+        .then(expr)
+        .map(move |(a, b)| constructor(Box::new(a), Box::new(b)))
+}
+
 fn parse_val_expr() -> impl Parser<Token, ValExpr, Error = Simple<Token>> {
     use Token::*;
 
-    recursive(|val| {
-        let matrix = val
+    recursive(|expr| {
+        let matrix = expr
             .clone()
-            .chain(just(Comma).ignore_then(val).repeated())
+            .chain(just(Comma).ignore_then(expr.clone()).repeated())
             .or_not()
             .flatten()
             .then_ignore(just(Semicolon).then(parse_aliased_domain()).or_not())
@@ -227,10 +230,17 @@ fn parse_val_expr() -> impl Parser<Token, ValExpr, Error = Simple<Token>> {
             BoolLit(b) => ValExpr::Boolean(b),
         };
 
-        // let plus = val.then_ignore(just(Plus))
-        // .then(val.clone()).map(|(a, b)| ValExpr::Plus(a, b));
+        let bracketed = expr.clone().delimited_by(just(LBracket), just(RBracket));
 
-        choice((primitive, matrix))
+        let times = bin_op(expr.clone(), Times, ValExpr::Times);
+        let plus = bin_op(expr.clone(), Plus, ValExpr::Plus);
+        let minus = bin_op(expr.clone(), Minus, ValExpr::Minus);
+
+        choice((
+            primitive, matrix, bracketed, // power,
+            times, plus, minus,
+            // unary_minus
+        ))
     })
     .boxed()
 }
@@ -305,7 +315,6 @@ fn parse_aliased_domain() -> impl Parser<Token, DomainExpr, Error = Simple<Token
     .boxed()
 }
 
-
 fn letting_prefix_parser() -> impl Parser<Token, String, Error = Simple<Token>> {
     use Token::*;
 
@@ -319,7 +328,6 @@ fn letting_prefix_parser() -> impl Parser<Token, String, Error = Simple<Token>> 
         .boxed()
 }
 
-
 fn statement_parser() -> impl Parser<Token, Statement, Error = Simple<Token>> {
     use Token::*;
 
@@ -330,7 +338,7 @@ fn statement_parser() -> impl Parser<Token, Statement, Error = Simple<Token>> {
     let letting = letting_prefix_parser()
         .then_ignore(just(Domain))
         .then(parse_aliased_domain())
-        .map(|(name, dom)| Statement::LettingDomain( name, dom))
+        .map(|(name, dom)| Statement::LettingDomain(name, dom))
         .or(letting_prefix_parser()
             .then(parse_val_expr())
             .map(|(name, val)| Statement::LettingVal(name, val)));
@@ -373,17 +381,23 @@ fn model_parser() -> impl Parser<Token, Model, Error = Simple<Token>> {
             for stmt in stmts {
                 match stmt {
                     Statement::Given(i, d) => givens.push((i, d)),
-                    Statement::Find( i, d) => finds.push((i, d)),
+                    Statement::Find(i, d) => finds.push((i, d)),
                     Statement::LettingDomain(i, d) => {
                         domains.insert(i, d);
-                    },
+                    }
                     Statement::LettingVal(name, val) => {
                         constants.insert(name, val);
                     }
                 }
             }
 
-            Model { givens, finds, domains, constants, constraints: Vec::new() }
+            Model {
+                givens,
+                finds,
+                domains,
+                constants,
+                constraints: Vec::new(),
+            }
         })
         .boxed()
 }
@@ -397,8 +411,9 @@ fn error<I: fmt::Display + std::hash::Hash + Eq>(e: Simple<I>) -> String {
 }
 
 fn parse_eprime<T, P>(string: &str, parser: P) -> Result<T, Vec<String>>
-
-where P: Parser<Token, T, Error = Simple<Token>> {
+where
+    P: Parser<Token, T, Error = Simple<Token>>,
+{
     let (tokens, errors) = lexer().parse_recovery(string);
 
     let mut errors: Vec<_> = errors.into_iter().map(error).collect();
@@ -425,7 +440,6 @@ pub fn parse_eprime_model(model: &str) -> Result<Model, Vec<String>> {
 pub fn parse_eprime_params(params: &str) -> Result<Assignments, Vec<String>> {
     parse_eprime(params, param_parser())
 }
-
 
 fn duplicate_decl(span: std::ops::Range<usize>, name: String) -> Simple<Token> {
     Simple::<Token>::custom(span, format!("Duplicate declaration of {name}"))

@@ -96,7 +96,7 @@ impl<T: FromVal> FromVal for Vec<T> {
 
 pub enum ValOrDomain {
     Val(Val),
-    Domain(Domain)
+    Domain(Domain),
 }
 
 pub type IdentTable = HashMap<String, ValOrDomain>;

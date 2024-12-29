@@ -1,13 +1,13 @@
-mod parser;
-mod generate;
-mod val;
 mod ast;
+mod generate;
+mod parser;
+mod val;
 
+use crate::generate::generate;
+use crate::parser::parse_eprime_model;
+use crate::Assignments;
 use std::fs::File;
 use std::io::Read;
-use crate::parser::parse_eprime_model;
-use crate::generate::generate;
-use crate::Assignments;
 use val::*;
 
 fn main() {
@@ -25,9 +25,12 @@ fn main() {
     }
 
     // first stage: evaluate letting statements
-    
+
     let mut result = Assignments::new();
-    result.insert("x".to_string(), Val::Matrix(vec![Val::Boolean(true), Val::Boolean(false)]));
+    result.insert(
+        "x".to_string(),
+        Val::Matrix(vec![Val::Boolean(true), Val::Boolean(false)]),
+    );
     let param_file = File::create("./out.param").unwrap();
-    generate(&result, param_file );
+    generate(&result, param_file);
 }

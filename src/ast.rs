@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use crate::Val;
 use crate::TypeError;
+use crate::Val;
+use std::collections::HashMap;
 
 pub struct Model {
     pub finds: Vec<(String, DomainExpr)>,
     pub givens: Vec<(String, DomainExpr)>,
     pub domains: HashMap<String, DomainExpr>,
     pub constraints: Vec<Constraint>,
-    pub constants: HashMap<String, ValExpr>
+    pub constants: HashMap<String, ValExpr>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,9 +50,8 @@ pub enum Statement {
     LettingDomain(String, DomainExpr),
     LettingVal(String, ValExpr),
     Given(String, DomainExpr),
-    Find(String, DomainExpr)
+    Find(String, DomainExpr),
 }
-
 
 #[derive(Clone, Debug)]
 pub enum Constraint {}
